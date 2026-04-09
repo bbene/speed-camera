@@ -247,3 +247,60 @@ canvas {
 .card {
     animation: fadeIn 0.3s ease-in-out;
 }
+
+/* Preview Image Styling */
+#preview-image {
+    width: 100%;
+    height: auto;
+    border: 1px solid #dee2e6;
+    border-radius: 0.5rem;
+    background-color: #f8f9fa;
+    display: block;
+    margin-bottom: 0.5rem;
+    transition: opacity 0.3s ease-in-out;
+}
+
+#preview-image:hover {
+    opacity: 0.95;
+}
+
+#preview-timestamp {
+    font-size: 0.875rem;
+    color: #6c757d;
+}
+
+/* Preview Settings Styling */
+.form-switch .form-check-input {
+    cursor: pointer;
+    width: 3.5em;
+    height: 1.5em;
+    border-radius: 1em;
+}
+
+.form-switch .form-check-label {
+    cursor: pointer;
+    padding-left: 0.5rem;
+    margin-bottom: 0;
+    user-select: none;
+}
+
+.form-label {
+    font-weight: 600;
+    font-size: 0.875rem;
+    color: #495057;
+    margin-bottom: 0.5rem;
+}
+
+#refresh-rate {
+    max-width: 200px;
+}
+
+.card-subtitle {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #6c757d;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid #dee2e6;
+}

@@ -31,10 +31,6 @@ COPY models.py .
 COPY database.py .
 COPY requirements.txt .
 
-# Copy web interface files
-COPY templates/ templates/
-COPY static/ static/
-
 # Install only the new packages via pip (Flask, SQLAlchemy, python-dotenv, docopt)
 # psycopg2 is installed via conda for better compatibility
 RUN pip install --no-cache-dir \

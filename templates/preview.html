@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}Camera Preview - Speed Camera{% endblock %}
+
+{% block content %}
+<div class="alert alert-info alert-dismissible fade show" role="alert">
+    <strong>📹 Camera Configuration Preview:</strong> This page shows the live camera feed.
+    You'll be able to configure detection zones here in future updates.
+    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+</div>
+
+<!-- Live Preview Section -->
+<div class="row">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Live Camera Preview</h5>
+                <img id="preview-image" src="/api/preview" style="width: 100%; height: auto; border-radius: 0.5rem; background-color: #f8f9fa;">
+                <small class="text-muted d-block mt-2" id="preview-timestamp">Last updated: -</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Camera Controls</h5>
+                <button class="btn btn-primary w-100 mb-3" id="refresh-btn">
+                    <i class="bi bi-arrow-clockwise"></i> Refresh Preview
+                </button>
+                <hr>
+                <div class="alert alert-sm alert-info" role="alert">
+                    <small><strong>On-Demand Refresh:</strong> Click the button above to load a fresh preview from the camera. This reduces network traffic compared to auto-refresh.</small>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/preview.js') }}"></script>
+{% endblock %}

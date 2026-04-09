@@ -41,6 +41,9 @@ services:
       - ./calibrate.py:/app/calibrate.py
       - ./models.py:/app/models.py
       - ./database.py:/app/database.py
+      # Mount web interface files (templates and static assets)
+      - ./templates:/app/templates
+      - ./static:/app/static
       # Mount config file (read-only)
       - ./config.yaml:/app/config.yaml:ro
       # Mount data directory for CSV logs and alerts

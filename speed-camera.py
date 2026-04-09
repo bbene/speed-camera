@@ -25,7 +25,7 @@ import subprocess
 from multiprocessing import Process
 from threading import Thread
 from camera import create_camera
-from flask import Flask, render_template, jsonify, request, send_file
+from flask import Flask, render_template, jsonify, request, send_file, redirect
 from io import BytesIO
 from models import Detection
 from database import init_database, get_database
@@ -78,6 +78,9 @@ class Config:
     telegram_token = ""       # <---- bot token to authenticate with Telegram
     telegram_chat_id = ""     # <---- person/group `chat_id` to send the alert to
     telegram_frequency = 6    # <---- hours between periodic text updates
+    # web interface preview
+    preview_enabled = True    # <---- enable continuous preview updates
+    preview_frame_skip = 5    # <---- save preview every N frames (prevents excessive I/O)
     # camera configuration
     camera = {}               # <---- camera type and settings
 
@@ -365,11 +368,20 @@ logging.info("Database initialized")
 # Initialize Flask app
 app = Flask(__name__, template_folder='templates', static_folder='static')
 
-# Flask API Routes
+# Flask Routes
 @app.route('/')
 def index():
+    return redirect('/dashboard')
+
+@app.route('/dashboard')
+def dashboard():
     return render_template('dashboard.html')
 
+@app.route('/preview')
+def preview():
+    return render_template('preview.html')
+
+# Flask API Routes
 @app.route('/api/stats')
 def api_stats():
     """Get detection statistics for a date range"""
@@ -525,6 +537,28 @@ def api_gif(detection_id):
         logging.error(f"Error serving GIF: {e}")
         return 'Error serving GIF', 500
 
+@app.route('/api/preview')
+def api_preview():
+    """Serve the live preview image with cache-busting support"""
+    try:
+        with open('data/preview.jpg', 'rb') as f:
+            image_data = f.read()
+        response = send_file(
+            BytesIO(image_data),
+            mimetype='image/jpeg',
+            as_attachment=False
+        )
+        # Disable caching to ensure fresh image
+        response.cache_control.max_age = 0
+        response.cache_control.no_cache = True
+        response.cache_control.no_store = True
+        return response
+    except FileNotFoundError:
+        return jsonify({'error': 'Preview not available'}), 404
+    except Exception as e:
+        logging.error(f"Error serving preview: {e}")
+        return jsonify({'error': 'Error serving preview'}), 500
+
 def run_flask():
     """Run Flask app in a separate thread"""
     port = int(os.environ.get('FLASK_PORT', 5000))
@@ -573,6 +607,8 @@ stats_r2l = np.array([])
 stats_time = datetime.now(timezone.utc)
 # startup
 has_started = False
+# preview frame counter
+frame_counter = 0
 
 # capture frames from the camera (using capture_continuous.
 #   This keeps the picamera in capture mode - it doesn't need
@@ -588,15 +624,21 @@ try:
         # Get the frame from camera first
         image = camera.get_frame()
 
-        # Save a preview of the image
-        if not has_started:
+        # Save a preview of the image (continuously if enabled)
+        if cfg.preview_enabled and frame_counter % cfg.preview_frame_skip == 0:
             preview_image = annotate_image(image, timestamp)
             cv2.imwrite("data/preview.jpg", preview_image)
+
+        # Mark startup for legacy compatibility
+        if not has_started:
             has_started = True
 
         if PREVIEW:
             camera.stop()
             exit(0)
+
+        # Increment frame counter
+        frame_counter += 1
 
         # Log the current FPS
         fps_frames += 1
