@@ -814,17 +814,17 @@ try:
                         #you need at least 3 data points to calculate a mean and we're deleting two
                         if (len(speeds) > 3):
                             # Mean of all items except the first and last one
-                            mean_speed = np.mean(speeds[1:-1])
+                            mean_speed = float(np.mean(speeds[1:-1]))
                             # Mode of area (except the first and last)
-                            avg_area = np.average(areas[1:-1])
+                            avg_area = float(np.average(areas[1:-1]))
                             # SD of all items except the last one
-                            sd_speed = np.std(speeds[:-1])
-                            sd_area = np.std(areas[1:-1])
-                            confidence = ((mean_speed - sd_speed) / mean_speed) * 100
+                            sd_speed = float(np.std(speeds[:-1]))
+                            sd_area = float(np.std(areas[1:-1]))
+                            confidence = float(((mean_speed - sd_speed) / mean_speed) * 100)
                         elif (len(speeds) > 1):
                             # use the last element in the array
-                            mean_speed = speeds[-1]
-                            avg_area = areas[-1]
+                            mean_speed = float(speeds[-1])
+                            avg_area = float(areas[-1])
                             # Set it to a very high value to highlight it's not to be trusted.
                             sd_speed = 99
                             sd_area = 99999
