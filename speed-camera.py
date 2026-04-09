@@ -22,6 +22,7 @@ import json
 import yaml
 import shutil
 import subprocess
+from PIL import Image
 from multiprocessing import Process
 from threading import Thread
 from camera import create_camera
@@ -130,12 +131,19 @@ class Recorder:
                 setattr(self, key, value)
 
     def send_animation(self, timestamp, events, confidence, mph):
+        # Validate events list
+        if not events:
+            logging.warning("send_animation called with empty events list")
+            return
+
         folder = "logs/{}-{:02.0f}mph-{:.0f}".format(timestamp.strftime('%Y-%m-%d_%H:%M:%S.%f'), mph, confidence)
         gif_file = "{}.gif".format(folder)
         json_file = "{}.json".format(folder)
 
         # Create the directory
         Path(folder).mkdir(parents=True, exist_ok=True)
+
+        logging.info(f"Creating GIF for {len(events)} frames at {mph:.1f} mph ({confidence:.0f}% confidence)")
 
         data = []
         for i, e in enumerate(events):
@@ -152,15 +160,34 @@ class Recorder:
         with open(json_file, 'w') as outfile:
             json.dump(data, outfile)
 
-        # Create a gif
-        p = subprocess.Popen(["/usr/bin/convert", "-delay", "10", "*.jpg", "../../{}".format(gif_file)], cwd=folder)
-        p.wait()
-
-        # Read GIF data into memory
+        # Create a GIF from the saved images using PIL
         gif_data = None
-        if Path(gif_file).exists():
-            with open(gif_file, 'rb') as f:
-                gif_data = f.read()
+        try:
+            images = []
+            for i in range(len(events)):
+                frame_path = f"{folder}/{i:04d}.jpg"
+                if Path(frame_path).exists():
+                    images.append(Image.open(frame_path))
+
+            if images:
+                # Save as GIF with 100ms per frame
+                images[0].save(
+                    gif_file,
+                    save_all=True,
+                    append_images=images[1:],
+                    duration=100,
+                    loop=0
+                )
+                logging.info(f"GIF created successfully: {gif_file} ({len(images)} frames)")
+
+                # Read GIF data into memory
+                with open(gif_file, 'rb') as f:
+                    gif_data = f.read()
+                logging.info(f"GIF data read successfully: {len(gif_data)} bytes")
+            else:
+                logging.warning(f"No frames found to create GIF in {folder}")
+        except Exception as e:
+            logging.error(f"Failed to create GIF: {e}")
 
         # Remove the temporary files
         shutil.rmtree(folder, ignore_errors=True)
@@ -176,9 +203,10 @@ class Recorder:
                 gif_data=gif_data
             )
             db.add_detection(detection)
-            logging.info(f"Stored GIF alert to database: {mph} mph @ {confidence}%")
+            gif_status = "with GIF" if gif_data else "without GIF"
+            logging.info(f"Stored alert to database: {mph:.1f} mph @ {confidence:.0f}% {gif_status}")
         except Exception as e:
-            logging.error(f"Failed to store GIF alert: {e}")
+            logging.error(f"Failed to store alert to database: {e}")
 
         return gif_file
 
