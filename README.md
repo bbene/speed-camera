@@ -10,13 +10,48 @@ This program, designed for the Raspberry Pi, records the speed of cars driving p
 
 All of the data is output in a CSV format that works well in software like Splunk.
 
+**Now with Docker & RTSP support!** Run this on any system with Docker, and use network IP cameras via RTSP streams instead of just PiCamera.
+
 ## Requirements
 
+### Traditional (Raspberry Pi)
 * Raspberry Pi 2 Model B (or 3)
 * Picamera
 * Opencv
-* Imagemagik
+* Imagemagick
 * Python 3
+
+### Docker (Any System)
+* Docker and Docker Compose installed
+* RTSP camera (or USB camera with /dev/video0 passthrough)
+* Internet connection (for Telegram alerts)
+
+## Quick Start (Docker)
+
+1. Clone this repository and navigate to it
+2. Copy and edit `config.yaml.example` to `config.yaml`:
+   ```bash
+   cp config.yaml.example config.yaml
+   # Edit config.yaml with your RTSP camera URL and monitoring zone
+   ```
+3. Create a `config.yaml` with your camera settings (see Configuration section below)
+4. Run with Docker Compose:
+   ```bash
+   docker compose up -d
+   docker compose logs -f  # View logs
+   ```
+5. Check `data/` directory for CSV logs and alerts
+
+### Docker Commands
+
+```bash
+make docker-build      # Build the Docker image
+make docker-run        # Start the container
+make docker-logs       # View container logs
+make docker-shell      # Open shell in running container
+make docker-stop       # Stop the container
+make docker-rebuild    # Rebuild image and restart
+```
 
 ## Example
 
@@ -33,6 +68,43 @@ _One week worth of data from my house. I live 100ft from an intersection, my roa
 ## Configuration
 
 There are a number of different sections in the `config.yaml`
+
+### Camera Configuration
+
+Select your camera type and configure accordingly:
+
+| *field* | *options* | *description* |
+| ------- | --------- | ------------- |
+| `camera.type` | `rtsp`, `picamera` | Camera input type (default: `picamera` for backward compatibility) |
+| `camera.rtsp_url` | URL string | RTSP stream URL (required for `type: rtsp`) |
+| `camera.username` | string | Optional username for RTSP authentication |
+| `camera.password` | string | Optional password for RTSP authentication |
+| `camera.timeout` | seconds | Timeout for RTSP read operations (default: 10) |
+
+**Examples:**
+
+RTSP Network Camera (Hikvision, Dahua, etc.):
+```yaml
+camera:
+  type: rtsp
+  rtsp_url: "rtsp://192.168.1.100:554/stream"
+  username: admin
+  password: password123
+```
+
+Raspberry Pi PiCamera (Legacy):
+```yaml
+camera:
+  type: picamera
+  fps: 30
+```
+
+USB Webcam via RTSP (requires ffmpeg server):
+```yaml
+camera:
+  type: rtsp
+  rtsp_url: "rtsp://localhost:8554/stream"
+```
 
 ### Monitoring Location
 
@@ -80,11 +152,57 @@ For this section, speed is the mean MPH, area is pixels, and confidence is how c
 
 ## Installation
 
+### Traditional (Raspberry Pi)
+
 1. Copy all files to the Pi under `/home/pi/speed-camera`
 2. Install dependencies `$ sudo make install`
 3. Create a config file at `config.yaml` (see *Configuration*)
 4. Start the service `$ sudo make restart`
 5. Tail the logs `$ make tail`
+
+### Docker (Recommended)
+
+See "Quick Start (Docker)" section above.
+
+## Troubleshooting
+
+### Docker Issues
+
+**Container exits immediately:**
+```bash
+docker compose logs  # Check error messages
+```
+
+**Cannot connect to RTSP camera:**
+- Verify RTSP URL is correct: `rtsp://camera-ip:554/stream`
+- Check camera is reachable: `ping camera-ip`
+- Verify credentials if needed
+- Check network firewall allows RTSP (port 554/10554)
+- See logs: `docker compose logs -f`
+
+**Permission denied errors:**
+- Ensure `config.yaml` and `data/` directory are readable
+- Check Docker user permissions: `ls -la logs/ data/`
+
+**Out of memory:**
+- Reduce image resolution in config
+- Set memory limits in docker compose.yml
+
+### RTSP Camera Configuration
+
+**Hikvision/Dahua cameras:**
+```
+rtsp://admin:password@192.168.1.100:554/Streaming/Channels/101
+```
+
+**Reolink cameras:**
+```
+rtsp://admin:password@192.168.1.100:554/h264Preview_01_main
+```
+
+**Generic cameras:**
+- Check manufacturer documentation for stream URL
+- Common paths: `/stream`, `/live`, `/h264_stream`, `/mjpeg`
 
 ## Usage
 

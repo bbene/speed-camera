@@ -11,8 +11,6 @@ Options:
 
 # import the necessary packages
 from docopt import docopt
-from picamera import PiCamera
-from picamera.array import PiRGBArray
 from pathlib import Path
 from datetime import datetime, timezone
 import cv2
@@ -26,6 +24,7 @@ import shutil
 import telegram
 import subprocess
 from multiprocessing import Process
+from camera import create_camera
 
 # Location for files/logs
 FILENAME_SERVICE = "logs/service.log"
@@ -72,6 +71,8 @@ class Config:
     telegram_token = ""       # <---- bot token to authenticate with Telegram
     telegram_chat_id = ""     # <---- person/group `chat_id` to send the alert to
     telegram_frequency = 6    # <---- hours between periodic text updates
+    # camera configuration
+    camera = {}               # <---- camera type and settings
 
     @staticmethod
     def load(config_file):
@@ -81,8 +82,7 @@ class Config:
                 data = yaml.safe_load(stream)
 
                 for key, value in data.items():
-                    if hasattr(cfg, key):
-                        setattr(cfg, key, value)
+                    setattr(cfg, key, value)
 
             except yaml.YAMLError as exc:
                 logging.error("Failed to load config: {}".format(exc))
@@ -274,7 +274,7 @@ def detect_motion(image, min_area):
     # dilate the thresholded image to fill in any holes, then find contours
     # on thresholded image
     image = cv2.dilate(image, None, iterations=2)
-    (_, cnts, _) = cv2.findContours(image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cnts, _ = cv2.findContours(image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     # look for motion
     motion_found = False
@@ -347,23 +347,6 @@ def annotate_image(image, timestamp, mph=0, confidence=0, h=0, w=0, x=0, y=0):
 
     return image
 
-# initialize the camera. Adjust vflip and hflip to reflect your camera's orientation
-def setup_camera(cfg):
-    logging.info("Booting up camera")
-
-    # initialize the camera. Adjust vflip and hflip to reflect your camera's orientation
-    camera = PiCamera(resolution=cfg.resolution, framerate=cfg.fps, sensor_mode=5)
-    camera.vflip = cfg.camera_vflip
-    camera.hflip = cfg.camera_hflip
-
-    # start capturing
-    capture = PiRGBArray(camera, size=camera.resolution)
-
-    # allow the camera to warm up
-    time.sleep(2)
-
-    return (camera, capture)
-
 # Setup logging
 Path("logs").mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
@@ -381,8 +364,9 @@ logging.basicConfig(
 # load config
 cfg = Config.load(config_file)
 
-# setup camera
-(camera, capture) = setup_camera(cfg)
+# initialize camera (with automatic type detection)
+camera = create_camera(cfg)
+camera.start()
 
 # determine the boundary
 logging.info("Monitoring: ({},{}) to ({},{}) = {}x{} space".format(
@@ -432,268 +416,275 @@ has_started = False
 #   This keeps the picamera in capture mode - it doesn't need
 #   to prep for each frame's capture.
 #
-for frame in camera.capture_continuous(capture, format="bgr", use_video_port=True):
-    # initialize the timestamp
-    timestamp = datetime.now(timezone.utc)
+# capture frames from the camera
+#
+try:
+    while True:
+        # initialize the timestamp
+        timestamp = datetime.now(timezone.utc)
 
-    # Save a preview of the image
-    if not has_started:
-        image = annotate_image(frame.array, timestamp)
-        cv2.imwrite("preview.jpg", image)
-        recorder.send_image(
-            filename='preview.jpg',
-            text='Current View'
-        )
-        has_started = True
+        # Get the frame from camera first
+        image = camera.get_frame()
 
-    if PREVIEW:
-        exit(0)
-
-    # Log the current FPS
-    fps_frames += 1
-    if fps_frames > 1000:
-        elapsed = secs_diff(timestamp, fps_time)
-        logging.info("Current FPS @ {:.0f}".format(fps_frames/elapsed))
-        fps_time = timestamp
-        fps_frames = 0
-
-    # Share stats every X hours
-    if secs_diff(timestamp, stats_time) > cfg.telegram_frequency * 60 * 60:
-        stats_time = timestamp
-        total = len(stats_l2r) + len(stats_r2l)
-        if total > 0:
-            l2r_perc = len(stats_l2r) / total * 100
-            r2l_perc = len(stats_r2l) / total * 100
-
-            l2r_mean = 0
-            r2l_mean = 0
-            if len(stats_l2r) > 0:
-                l2r_mean = np.mean(stats_l2r)
-            if len(stats_r2l) > 0:
-                r2l_mean = np.mean(stats_r2l)
-
-            recorder.send_message(
-                "{:.0f} cars in the past {:.0f} hours\nL2R {:.0f}% at {:.0f} speed\nR2L {:.0f}% at {:.0f} speed".format(
-                    total, cfg.telegram_frequency, l2r_perc, l2r_mean, r2l_perc, r2l_mean
-                )
+        # Save a preview of the image
+        if not has_started:
+            preview_image = annotate_image(image, timestamp)
+            cv2.imwrite("data/preview.jpg", preview_image)
+            recorder.send_image(
+                filename='data/preview.jpg',
+                text='Current View'
             )
+            has_started = True
 
-        # clear stats
-        stats_l2r = np.array([])
-        stats_r2l = np.array([])
-        stats_time = timestamp
+        if PREVIEW:
+            camera.stop()
+            exit(0)
 
-    # grab the raw NumPy array representing the image
-    image = frame.array
+        # Log the current FPS
+        fps_frames += 1
+        if fps_frames > 1000:
+            elapsed = secs_diff(timestamp, fps_time)
+            logging.info("Current FPS @ {:.0f}".format(fps_frames/elapsed))
+            fps_time = timestamp
+            fps_frames = 0
 
-    # crop area defined by [y1:y2,x1:x2]
-    gray = image[
-        cfg.upper_left_y:cfg.lower_right_y,
-        cfg.upper_left_x:cfg.lower_right_x
-    ]
+        # Share stats every X hours
+        if secs_diff(timestamp, stats_time) > cfg.telegram_frequency * 60 * 60:
+            stats_time = timestamp
+            total = len(stats_l2r) + len(stats_r2l)
+            if total > 0:
+                l2r_perc = len(stats_l2r) / total * 100
+                r2l_perc = len(stats_r2l) / total * 100
 
-    # convert the fram to grayscale, and blur it
-    gray = cv2.cvtColor(gray, cv2.COLOR_BGR2GRAY)
-    gray = cv2.GaussianBlur(gray, BLURSIZE, 0)
+                l2r_mean = 0
+                r2l_mean = 0
+                if len(stats_l2r) > 0:
+                    l2r_mean = np.mean(stats_l2r)
+                if len(stats_r2l) > 0:
+                    r2l_mean = np.mean(stats_r2l)
 
-    # if the base image has not been defined, initialize it
-    if base_image is None:
-        base_image = gray.copy().astype("float")
-        lastTime = timestamp
-        capture.truncate(0)
-        continue
+                recorder.send_message(
+                    "{:.0f} cars in the past {:.0f} hours\nL2R {:.0f}% at {:.0f} speed\nR2L {:.0f}% at {:.0f} speed".format(
+                        total, cfg.telegram_frequency, l2r_perc, l2r_mean, r2l_perc, r2l_mean
+                    )
+                )
 
-    #  compute the absolute difference between the current image and
-    # base image and then turn eveything lighter gray than THRESHOLD into
-    # white
-    frameDelta = cv2.absdiff(gray, cv2.convertScaleAbs(base_image))
-    thresh = cv2.threshold(frameDelta, THRESHOLD, 255, cv2.THRESH_BINARY)[1]
+            # clear stats
+            stats_l2r = np.array([])
+            stats_r2l = np.array([])
+            stats_time = timestamp
 
-    # look for motion in the image
-    (motion_found, x, y, w, h, biggest_area) = detect_motion(thresh, cfg.image_min_area)
+        # crop area defined by [y1:y2,x1:x2]
+        gray = image[
+            cfg.upper_left_y:cfg.lower_right_y,
+            cfg.upper_left_x:cfg.lower_right_x
+        ]
 
-    if motion_found:
-        if state == WAITING:
-            # intialize tracking
-            state = TRACKING
-            initial_x = x
-            initial_w = w
-            last_x = x
-            last_w = w
-            initial_time = timestamp
+        # convert the fram to grayscale, and blur it
+        gray = cv2.cvtColor(gray, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, BLURSIZE, 0)
 
-            last_mph = 0
+        # if the base image has not been defined, initialize it
+        if base_image is None:
+            base_image = gray.copy().astype("float")
+            lastTime = timestamp
+            continue
 
-            # initialise array for storing speeds & standard deviation
-            areas = np.array([])
-            speeds = np.array([])
+        #  compute the absolute difference between the current image and
+        # base image and then turn eveything lighter gray than THRESHOLD into
+        # white
+        frameDelta = cv2.absdiff(gray, cv2.convertScaleAbs(base_image))
+        thresh = cv2.threshold(frameDelta, THRESHOLD, 255, cv2.THRESH_BINARY)[1]
 
-            # event capturing
-            events = []
+        # look for motion in the image
+        (motion_found, x, y, w, h, biggest_area) = detect_motion(thresh, cfg.image_min_area)
 
-            # detect gap and data points
-            car_gap = secs_diff(initial_time, cap_time)
+        if motion_found:
+            if state == WAITING:
+                # intialize tracking
+                state = TRACKING
+                initial_x = x
+                initial_w = w
+                last_x = x
+                last_w = w
+                initial_time = timestamp
 
-            logging.info('Tracking')
-            logging.info("Initial Data: x={:.0f} w={:.0f} area={:.0f} gap={}".format(initial_x, initial_w, biggest_area, car_gap))
-            logging.info(" x-Δ     Secs      MPH  x-pos width area dir")
+                last_mph = 0
 
-            # if gap between cars too low then probably seeing tail lights of current car
-            # but I might need to tweek this if find I'm not catching fast cars
-            if (car_gap < cfg.min_distance):
-                state = WAITING
-                direction = UNKNOWN
-                motion_found = False
-                biggest_area = 0
-                capture.truncate(0)
-                base_image = None
-                logging.info("Car too close, skipping")
-                continue
-        else:
-            # compute the lapsed time
-            secs = secs_diff(timestamp, initial_time)
+                # initialise array for storing speeds & standard deviation
+                areas = np.array([])
+                speeds = np.array([])
 
-            # timeout after 5 seconds of inactivity
-            if secs >= 5:
-                state = WAITING
-                direction = UNKNOWN
-                motion_found = False
-                biggest_area = 0
-                capture.truncate(0)
-                base_image = None
-                logging.info('Resetting')
-                continue
+                # event capturing
+                events = []
 
-            if state == TRACKING:
-                abs_chg = 0
-                mph = 0
-                distance = 0
-                if x >= last_x:
-                    direction = LEFT_TO_RIGHT
-                    distance = cfg.l2r_distance
-                    abs_chg = (x + w) - (initial_x + initial_w)
-                    mph = get_speed(abs_chg, l2r_ft_per_pixel, secs)
-                else:
-                    direction = RIGHT_TO_LEFT
-                    distance = cfg.r2l_distance
-                    abs_chg = initial_x - x
-                    mph = get_speed(abs_chg, r2l_ft_per_pixel, secs)
+                # detect gap and data points
+                car_gap = secs_diff(initial_time, cap_time)
 
-                speeds = np.append(speeds, mph)
-                areas = np.append(areas, biggest_area)
+                logging.info('Tracking')
+                logging.info("Initial Data: x={:.0f} w={:.0f} area={:.0f} gap={}".format(initial_x, initial_w, biggest_area, car_gap))
+                logging.info(" x-Δ     Secs      MPH  x-pos width area dir")
 
-                # Store event data
-                events.append({
-                    'image': image.copy(),
-                    'ts': timestamp,
-                    # Location of object
-                    'x': x,
-                    'y': y,
-                    'w': w,
-                    'h': h,
-                    # Speed
-                    'mph': mph,
-                    # MPH is calculated from secs, delta, fov, distance, image_width
-                    'fov': cfg.fov,
-                    'image_width': cfg.image_width,
-                    'distance': distance,
-                    'secs': secs,
-                    'delta': abs_chg,
-                    # Other useful data
-                    'area': biggest_area,
-                    'dir': str_direction(direction),
-                })
+                # if gap between cars too low then probably seeing tail lights of current car
+                # but I might need to tweek this if find I'm not catching fast cars
+                if (car_gap < cfg.min_distance):
+                    state = WAITING
+                    direction = UNKNOWN
+                    motion_found = False
+                    biggest_area = 0
+                    base_image = None
+                    logging.info("Car too close, skipping")
+                    continue
+            else:
+                # compute the lapsed time
+                secs = secs_diff(timestamp, initial_time)
 
-                # If we've stopped or are going backward, reset.
-                if mph <= 0:
-                    logging.info("negative speed - stopping tracking")
-                    if direction == LEFT_TO_RIGHT:
-                        direction = RIGHT_TO_LEFT  # Reset correct direction
-                        x = 1 # Force save
+                # timeout after 5 seconds of inactivity
+                if secs >= 5:
+                    state = WAITING
+                    direction = UNKNOWN
+                    motion_found = False
+                    biggest_area = 0
+                    base_image = None
+                    logging.info('Resetting')
+                    continue
+
+                if state == TRACKING:
+                    abs_chg = 0
+                    mph = 0
+                    distance = 0
+                    if x >= last_x:
+                        direction = LEFT_TO_RIGHT
+                        distance = cfg.l2r_distance
+                        abs_chg = (x + w) - (initial_x + initial_w)
+                        mph = get_speed(abs_chg, l2r_ft_per_pixel, secs)
                     else:
-                        direction = LEFT_TO_RIGHT  # Reset correct direction
-                        x = cfg.monitored_width + MIN_SAVE_BUFFER  # Force save
+                        direction = RIGHT_TO_LEFT
+                        distance = cfg.r2l_distance
+                        abs_chg = initial_x - x
+                        mph = get_speed(abs_chg, r2l_ft_per_pixel, secs)
 
-                logging.info("{0:4d}  {1:7.2f}  {2:7.0f}   {3:4d}  {4:4d} {5:4d} {6:s}".format(
-                    abs_chg, secs, mph, x, w, biggest_area, str_direction(direction)))
+                    speeds = np.append(speeds, mph)
+                    areas = np.append(areas, biggest_area)
 
-                # is front of object outside the monitired boundary? Then write date, time and speed on image
-                # and save it
-                if ((x <= MIN_SAVE_BUFFER) and (direction == RIGHT_TO_LEFT)) \
-                        or ((x+w >= cfg.monitored_width - MIN_SAVE_BUFFER)
-                        and (direction == LEFT_TO_RIGHT)):
-                    sd_speed = 0
-                    sd_area = 0
-                    confidence = 0
-                    #you need at least 3 data points to calculate a mean and we're deleting two
-                    if (len(speeds) > 3):
-                        # Mean of all items except the first and last one
-                        mean_speed = np.mean(speeds[1:-1])
-                        # Mode of area (except the first and last)
-                        avg_area = np.average(areas[1:-1])
-                        # SD of all items except the last one
-                        sd_speed = np.std(speeds[:-1])
-                        sd_area = np.std(areas[1:-1])
-                        confidence = ((mean_speed - sd_speed) / mean_speed) * 100
-                    elif (len(speeds) > 1):
-                        # use the last element in the array
-                        mean_speed = speeds[-1]
-                        avg_area = areas[-1]
-                        # Set it to a very high value to highlight it's not to be trusted.
-                        sd_speed = 99
-                        sd_area = 99999
-                    else:
-                        mean_speed = 0  # ignore it
-                        avg_area = 0
+                    # Store event data
+                    events.append({
+                        'image': image.copy(),
+                        'ts': timestamp,
+                        # Location of object
+                        'x': x,
+                        'y': y,
+                        'w': w,
+                        'h': h,
+                        # Speed
+                        'mph': mph,
+                        # MPH is calculated from secs, delta, fov, distance, image_width
+                        'fov': cfg.fov,
+                        'image_width': cfg.image_width,
+                        'distance': distance,
+                        'secs': secs,
+                        'delta': abs_chg,
+                        # Other useful data
+                        'area': biggest_area,
+                        'dir': str_direction(direction),
+                    })
+
+                    # If we've stopped or are going backward, reset.
+                    if mph <= 0:
+                        logging.info("negative speed - stopping tracking")
+                        if direction == LEFT_TO_RIGHT:
+                            direction = RIGHT_TO_LEFT  # Reset correct direction
+                            x = 1 # Force save
+                        else:
+                            direction = LEFT_TO_RIGHT  # Reset correct direction
+                            x = cfg.monitored_width + MIN_SAVE_BUFFER  # Force save
+
+                    logging.info("{0:4d}  {1:7.2f}  {2:7.0f}   {3:4d}  {4:4d} {5:4d} {6:s}".format(
+                        abs_chg, secs, mph, x, w, biggest_area, str_direction(direction)))
+
+                    # is front of object outside the monitired boundary? Then write date, time and speed on image
+                    # and save it
+                    if ((x <= MIN_SAVE_BUFFER) and (direction == RIGHT_TO_LEFT)) \
+                            or ((x+w >= cfg.monitored_width - MIN_SAVE_BUFFER)
+                            and (direction == LEFT_TO_RIGHT)):
                         sd_speed = 0
                         sd_area = 0
+                        confidence = 0
+                        #you need at least 3 data points to calculate a mean and we're deleting two
+                        if (len(speeds) > 3):
+                            # Mean of all items except the first and last one
+                            mean_speed = np.mean(speeds[1:-1])
+                            # Mode of area (except the first and last)
+                            avg_area = np.average(areas[1:-1])
+                            # SD of all items except the last one
+                            sd_speed = np.std(speeds[:-1])
+                            sd_area = np.std(areas[1:-1])
+                            confidence = ((mean_speed - sd_speed) / mean_speed) * 100
+                        elif (len(speeds) > 1):
+                            # use the last element in the array
+                            mean_speed = speeds[-1]
+                            avg_area = areas[-1]
+                            # Set it to a very high value to highlight it's not to be trusted.
+                            sd_speed = 99
+                            sd_area = 99999
+                        else:
+                            mean_speed = 0  # ignore it
+                            avg_area = 0
+                            sd_speed = 0
+                            sd_area = 0
 
-                    logging.info("Determined area:   avg={:4.0f} deviation={:4.0f} frames={:0d}".format(avg_area, sd_area, len(areas)))
-                    logging.info("Determined speed: mean={:4.0f} deviation={:4.0f} frames={:0d}".format(mean_speed, sd_speed, len(speeds)))
-                    logging.info("Overall Confidence Level {:.0f}%".format(confidence))
+                        logging.info("Determined area:   avg={:4.0f} deviation={:4.0f} frames={:0d}".format(avg_area, sd_area, len(areas)))
+                        logging.info("Determined speed: mean={:4.0f} deviation={:4.0f} frames={:0d}".format(mean_speed, sd_speed, len(speeds)))
+                        logging.info("Overall Confidence Level {:.0f}%".format(confidence))
 
-                    # If they are speeding, record the event and image
-                    recorded = recorder.record(
-                        image=image,
-                        timestamp=timestamp,
-                        confidence=confidence,
-                        mean_speed=mean_speed,
-                        avg_area=avg_area,
-                        sd_speed=sd_speed,
-                        sd_area=sd_area,
-                        speeds=speeds,
-                        secs=secs,
-                        direction=direction,
-                        events=events
-                    )
-                    if recorded:
-                        logging.info("Event recorded")
-                        if direction == LEFT_TO_RIGHT :
-                            stats_l2r = np.append(stats_l2r, mean_speed)
-                        elif direction == RIGHT_TO_LEFT:
-                            stats_r2l = np.append(stats_r2l, mean_speed)
-                    else:
-                        logging.info("Event not recorded: Speed, Area, or Confidence too low")
+                        # If they are speeding, record the event and image
+                        recorded = recorder.record(
+                            image=image,
+                            timestamp=timestamp,
+                            confidence=confidence,
+                            mean_speed=mean_speed,
+                            avg_area=avg_area,
+                            sd_speed=sd_speed,
+                            sd_area=sd_area,
+                            speeds=speeds,
+                            secs=secs,
+                            direction=direction,
+                            events=events
+                        )
+                        if recorded:
+                            logging.info("Event recorded")
+                            if direction == LEFT_TO_RIGHT :
+                                stats_l2r = np.append(stats_l2r, mean_speed)
+                            elif direction == RIGHT_TO_LEFT:
+                                stats_r2l = np.append(stats_r2l, mean_speed)
+                        else:
+                            logging.info("Event not recorded: Speed, Area, or Confidence too low")
 
-                    state = SAVING
-                    cap_time = timestamp
-                # if the object hasn't reached the end of the monitored area, just remember the speed
-                # and its last position
-                last_mph = mph
-                last_x = x
-    else:
-        if state != WAITING:
-            state = WAITING
-            direction = UNKNOWN
-            logging.info('Resetting')
+                        state = SAVING
+                        cap_time = timestamp
+                    # if the object hasn't reached the end of the monitored area, just remember the speed
+                    # and its last position
+                    last_mph = mph
+                    last_x = x
+        else:
+            if state != WAITING:
+                state = WAITING
+                direction = UNKNOWN
+                logging.info('Resetting')
 
-    # Adjust the base_image as lighting changes through the day
-    if state == WAITING:
-        last_x = 0
-        cv2.accumulateWeighted(gray, base_image, 0.25)
+        # Adjust the base_image as lighting changes through the day
+        if state == WAITING:
+            last_x = 0
+            cv2.accumulateWeighted(gray, base_image, 0.25)
 
-    # clear the stream in preparation for the next frame
-    capture.truncate(0)
+        # clear the stream in preparation for the next frame
 
-# cleanup the camera and close any open windows
-cv2.destroyAllWindows()
+
+except KeyboardInterrupt:
+    logging.info("Interrupted by user")
+except Exception as e:
+    logging.error(f"Error in main loop: {e}")
+finally:
+    # cleanup the camera and close any open windows
+    camera.stop()
+    cv2.destroyAllWindows()

@@ -1,6 +1,30 @@
 HOST?=pi@127.0.0.1
 TARGET_PATH?=speed-camera
 
+# Docker targets
+.PHONY: docker-build docker-run docker-stop docker-logs docker-shell
+
+docker-build:
+	docker build -t speed-camera:latest .
+
+docker-run: docker-build
+	docker compose up -d
+
+docker-stop:
+	docker compose down
+
+docker-logs:
+	docker compose logs -f
+
+docker-shell:
+	docker compose exec speed-camera bash
+
+docker-rebuild:
+	docker compose down
+	docker build --no-cache -t speed-camera:latest .
+	docker compose up -d
+
+# Raspberry Pi deployment targets (existing)
 install:
 	apt-get install python3-picamera python3-docopt python3-opencv python3-scipy python3-numpy imagemagick python3-yaml
 	pip3 install python-telegram-bot

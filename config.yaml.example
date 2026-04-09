@@ -1,3 +1,18 @@
+# camera configuration
+camera:
+  # Camera type: 'rtsp' for network cameras, 'picamera' for Raspberry Pi
+  type: rtsp
+  # RTSP stream URL (for RTSP cameras)
+  rtsp_url: "rtsp://192.168.1.100:554/stream"
+  # Optional: RTSP authentication
+  username: "admin"
+  password: "password"
+
+  # Uncomment below for legacy Raspberry Pi PiCamera support
+  # type: picamera
+  # frame rate (fps)
+  # fps: 30
+
 # location to monitor
 upper_left_x: 0
 upper_left_y: 0

@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  speed-camera:
+    build: .
+    container_name: speed-camera
+    restart: on-failure
+    command: ["python", "speed-camera.py", "--config", "/app/config.yaml"]
+    volumes:
+      # Mount source code for development (hot-reload)
+      - ./speed-camera.py:/app/speed-camera.py
+      - ./camera.py:/app/camera.py
+      - ./calibrate.py:/app/calibrate.py
+      # Mount config file (read-only)
+      - ./config.yaml:/app/config.yaml:ro
+      # Mount data directory for CSV logs and alerts
+      - ./data:/app/data
+      # Mount logs directory
+      - ./logs:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+    # Adjust these based on your system
+    # For development/testing:
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '1'
+    #       memory: 512M
+    #     reservations:
+    #       cpus: '0.5'
+    #       memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
