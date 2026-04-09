@@ -167,23 +167,35 @@ class Recorder:
             for i in range(len(events)):
                 frame_path = f"{folder}/{i:04d}.jpg"
                 if Path(frame_path).exists():
-                    images.append(Image.open(frame_path))
+                    try:
+                        img = Image.open(frame_path)
+                        images.append(img)
+                    except Exception as e:
+                        logging.error(f"Failed to open frame {i}: {frame_path} - {e}")
+                else:
+                    logging.warning(f"Frame {i} not found: {frame_path}")
+
+            logging.info(f"Loaded {len(images)} frames out of {len(events)} expected")
 
             if images:
                 # Save as GIF with 100ms per frame
-                images[0].save(
-                    gif_file,
-                    save_all=True,
-                    append_images=images[1:],
-                    duration=100,
-                    loop=0
-                )
-                logging.info(f"GIF created successfully: {gif_file} ({len(images)} frames)")
+                try:
+                    images[0].save(
+                        gif_file,
+                        format='GIF',
+                        save_all=True,
+                        append_images=images[1:],
+                        duration=100,
+                        loop=0
+                    )
+                    logging.info(f"GIF created successfully: {gif_file} ({len(images)} frames)")
 
-                # Read GIF data into memory
-                with open(gif_file, 'rb') as f:
-                    gif_data = f.read()
-                logging.info(f"GIF data read successfully: {len(gif_data)} bytes")
+                    # Read GIF data into memory
+                    with open(gif_file, 'rb') as f:
+                        gif_data = f.read()
+                    logging.info(f"GIF data read successfully: {len(gif_data)} bytes")
+                except Exception as e:
+                    logging.error(f"Failed to save GIF: {e}")
             else:
                 logging.warning(f"No frames found to create GIF in {folder}")
         except Exception as e:
