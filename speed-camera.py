@@ -12,7 +12,7 @@ Options:
 # import the necessary packages
 from docopt import docopt
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import cv2
 import numpy as np
 import logging
@@ -21,14 +21,21 @@ import math
 import json
 import yaml
 import shutil
-import telegram
 import subprocess
 from multiprocessing import Process
+from threading import Thread
 from camera import create_camera
+from flask import Flask, render_template, jsonify, request, send_file
+from io import BytesIO
+from models import Detection
+from database import init_database, get_database
+import os
 
 # Location for files/logs
 FILENAME_SERVICE = "logs/service.log"
-FILENAME_RECORD = "logs/recorded_speed.csv"
+
+# Global database connection
+db = None
 
 # Important constants
 MIN_SAVE_BUFFER = 2
@@ -113,29 +120,11 @@ class Recorder:
     min_area = 2000           # <---- minimum area for recording events
     min_confidence = 70       # <---- minimum percentage confidence for recording events
     min_confidence_alert = 70 # <---- minimum percentage confidence for saving images
-    # communication
-    telegram_token = ""   # <---- telegram bot token
-    telegram_chat_id = "" # <---- telegram chat ID
-    bot = None
-
-    # Location of the record
-    RECORD_FILENAME = 'logs/recorded_speed.csv'
-    RECORD_HEADERS = 'timestamp,speed,speed_deviation,area,area_deviation,frames,seconds,direction'
 
     def __init__(self, cfg):
         for key, value in cfg.__dict__.items():
             if hasattr(self, key):
                 setattr(self, key, value)
-
-        # Initialize Bot
-        self.bot = None
-        if self.telegram_token and self.telegram_chat_id:
-            self.bot = telegram.Bot(self.telegram_token)
-
-        # Write headers to the output csv
-        f = Path(self.RECORD_FILENAME)
-        if not f.is_file():
-            self.write_csv(self.RECORD_HEADERS)
 
     def send_animation(self, timestamp, events, confidence, mph):
         folder = "logs/{}-{:02.0f}mph-{:.0f}".format(timestamp.strftime('%Y-%m-%d_%H:%M:%S.%f'), mph, confidence)
@@ -164,59 +153,53 @@ class Recorder:
         p = subprocess.Popen(["/usr/bin/convert", "-delay", "10", "*.jpg", "../../{}".format(gif_file)], cwd=folder)
         p.wait()
 
+        # Read GIF data into memory
+        gif_data = None
+        if Path(gif_file).exists():
+            with open(gif_file, 'rb') as f:
+                gif_data = f.read()
+
         # Remove the temporary files
         shutil.rmtree(folder, ignore_errors=True)
+        if Path(gif_file).exists():
+            os.remove(gif_file)
 
-        # Send message
-        self.send_gif(
-            filename=gif_file,
-            text='{:.0f} mph @ {:.0f}%'.format(mph, confidence)
-        )
+        # Store GIF in database
+        try:
+            detection = Detection(
+                timestamp=timestamp,
+                speed_mph=mph,
+                confidence=confidence,
+                gif_data=gif_data
+            )
+            db.add_detection(detection)
+            logging.info(f"Stored GIF alert to database: {mph} mph @ {confidence}%")
+        except Exception as e:
+            logging.error(f"Failed to store GIF alert: {e}")
 
         return gif_file
-
-    def write_csv(self, message):
-        f = open(self.RECORD_FILENAME, 'a')
-        f.write(message + "\n")
-        f.close
-
-    def send_message(self, text):
-        if not self.bot:
-            return
-
-        self.bot.send_message(
-            chat_id=self.telegram_chat_id,
-            text=text
-        )
-
-    def send_image(self, filename, text):
-        if not self.bot:
-            return
-
-        self.bot.send_photo(
-            chat_id=self.telegram_chat_id,
-            photo=open(filename, 'rb'),
-            caption=text
-        )
-
-    def send_gif(self, filename, text):
-        if not self.bot:
-            return
-
-        self.bot.send_animation(
-            chat_id=self.telegram_chat_id,
-            animation=open(filename, 'rb'),
-            caption=text
-        )
 
     def record(self, confidence, image, timestamp, mean_speed, avg_area, sd_speed, sd_area, speeds, secs, direction, events):
         if confidence < self.min_confidence or mean_speed < self.min_speed or avg_area < self.min_area:
             return False
 
-        # Write the log
-        self.write_csv("{},{:.0f},{:.0f},{:.0f},{:.0f},{:d},{:.2f},{:s}".format(
-            timestamp.timestamp(), mean_speed, sd_speed, avg_area, sd_area, len(speeds), secs, str_direction(direction))
-        )
+        # Store detection to database
+        try:
+            detection = Detection(
+                timestamp=timestamp,
+                speed_mph=mean_speed,
+                speed_deviation=sd_speed,
+                area=int(avg_area),
+                area_deviation=sd_area,
+                frames=len(speeds),
+                seconds=secs,
+                direction=str_direction(direction),
+                confidence=confidence
+            )
+            db.add_detection(detection)
+        except Exception as e:
+            logging.error(f"Failed to record detection: {e}")
+            return False
 
         # If the threshold is high enough, alert and write to disk
         if confidence >= self.min_confidence_alert and mean_speed >= self.min_speed_alert:
@@ -375,6 +358,185 @@ logging.info("Monitoring: ({},{}) to ({},{}) = {}x{} space".format(
 # initialize messaging
 recorder = Recorder(cfg)
 
+# Initialize database
+db = init_database()
+logging.info("Database initialized")
+
+# Initialize Flask app
+app = Flask(__name__, template_folder='templates', static_folder='static')
+
+# Flask API Routes
+@app.route('/')
+def index():
+    return render_template('dashboard.html')
+
+@app.route('/api/stats')
+def api_stats():
+    """Get detection statistics for a date range"""
+    from sqlalchemy import func
+
+    # Get query parameters
+    date_from = request.args.get('from')
+    date_to = request.args.get('to')
+
+    try:
+        if date_from:
+            date_from = datetime.fromisoformat(date_from.replace('Z', '+00:00'))
+        else:
+            date_from = datetime.now(timezone.utc) - timedelta(days=7)
+
+        if date_to:
+            date_to = datetime.fromisoformat(date_to.replace('Z', '+00:00'))
+        else:
+            date_to = datetime.now(timezone.utc)
+
+        session = db.get_session()
+
+        # Total count
+        total = session.query(func.count(Detection.id)).filter(
+            Detection.timestamp >= date_from,
+            Detection.timestamp <= date_to
+        ).scalar() or 0
+
+        # Average speeds by direction
+        l2r_avg = session.query(func.avg(Detection.speed_mph)).filter(
+            Detection.direction == 'LTR',
+            Detection.timestamp >= date_from,
+            Detection.timestamp <= date_to
+        ).scalar() or 0
+
+        r2l_avg = session.query(func.avg(Detection.speed_mph)).filter(
+            Detection.direction == 'RTL',
+            Detection.timestamp >= date_from,
+            Detection.timestamp <= date_to
+        ).scalar() or 0
+
+        # Speed distribution (histogram bins)
+        detections = session.query(Detection.speed_mph).filter(
+            Detection.timestamp >= date_from,
+            Detection.timestamp <= date_to
+        ).all()
+
+        speeds = [d[0] for d in detections]
+        bins = [0, 10, 20, 30, 40, 50, 60]
+        distribution = {}
+        for i in range(len(bins)-1):
+            count = sum(1 for s in speeds if bins[i] <= s < bins[i+1])
+            distribution[f'{bins[i]}-{bins[i+1]}'] = count
+        distribution['60+'] = sum(1 for s in speeds if s >= 60)
+
+        # Peak hours
+        peak_hours = {}
+        for i in range(24):
+            count = session.query(func.count(Detection.id)).filter(
+                func.extract('hour', Detection.timestamp) == i,
+                Detection.timestamp >= date_from,
+                Detection.timestamp <= date_to
+            ).scalar() or 0
+            peak_hours[str(i)] = count
+
+        session.close()
+
+        return jsonify({
+            'total': total,
+            'l2r_avg': round(l2r_avg, 1) if l2r_avg else 0,
+            'r2l_avg': round(r2l_avg, 1) if r2l_avg else 0,
+            'distribution': distribution,
+            'peak_hours': peak_hours
+        })
+    except Exception as e:
+        logging.error(f"Error in api_stats: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/detections')
+def api_detections():
+    """Get paginated list of detections"""
+    from sqlalchemy import desc
+
+    # Get query parameters
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 25, type=int)
+    date_from = request.args.get('from')
+    date_to = request.args.get('to')
+    speed_min = request.args.get('speed_min', 0, type=float)
+    speed_max = request.args.get('speed_max', 200, type=float)
+    direction = request.args.get('direction')  # 'LTR', 'RTL', or None for all
+
+    try:
+        if date_from:
+            date_from = datetime.fromisoformat(date_from.replace('Z', '+00:00'))
+        else:
+            date_from = datetime.now(timezone.utc) - timedelta(days=7)
+
+        if date_to:
+            date_to = datetime.fromisoformat(date_to.replace('Z', '+00:00'))
+        else:
+            date_to = datetime.now(timezone.utc)
+
+        session = db.get_session()
+
+        query = session.query(Detection).filter(
+            Detection.timestamp >= date_from,
+            Detection.timestamp <= date_to,
+            Detection.speed_mph >= speed_min,
+            Detection.speed_mph <= speed_max
+        )
+
+        if direction:
+            query = query.filter(Detection.direction == direction)
+
+        # Order by timestamp descending
+        query = query.order_by(desc(Detection.timestamp))
+
+        # Paginate
+        total = query.count()
+        detections = query.offset((page-1) * per_page).limit(per_page).all()
+
+        session.close()
+
+        return jsonify({
+            'total': total,
+            'page': page,
+            'per_page': per_page,
+            'detections': [d.to_dict() for d in detections]
+        })
+    except Exception as e:
+        logging.error(f"Error in api_detections: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/gif/<int:detection_id>')
+def api_gif(detection_id):
+    """Serve GIF for a specific detection"""
+    try:
+        session = db.get_session()
+        detection = session.query(Detection).filter(Detection.id == detection_id).first()
+        session.close()
+
+        if not detection or not detection.gif_data:
+            return 'GIF not found', 404
+
+        return send_file(
+            BytesIO(detection.gif_data),
+            mimetype='image/gif',
+            as_attachment=False,
+            download_name=f'detection_{detection_id}.gif'
+        )
+    except Exception as e:
+        logging.error(f"Error serving GIF: {e}")
+        return 'Error serving GIF', 500
+
+def run_flask():
+    """Run Flask app in a separate thread"""
+    port = int(os.environ.get('FLASK_PORT', 5000))
+    logging.info(f"Starting Flask web server on port {port}")
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+
+# Start Flask in a background thread
+flask_thread = Thread(target=run_flask, daemon=False)
+flask_thread.start()
+
+logging.info("Web interface started on http://0.0.0.0:5000")
+
 # calculate the the width of the image at the distance specified
 l2r_ft_per_pixel = get_pixel_width(cfg.fov, cfg.l2r_distance, cfg.image_width)
 r2l_ft_per_pixel = get_pixel_width(cfg.fov, cfg.r2l_distance, cfg.image_width)
@@ -430,10 +592,6 @@ try:
         if not has_started:
             preview_image = annotate_image(image, timestamp)
             cv2.imwrite("data/preview.jpg", preview_image)
-            recorder.send_image(
-                filename='data/preview.jpg',
-                text='Current View'
-            )
             has_started = True
 
         if PREVIEW:
@@ -463,8 +621,9 @@ try:
                 if len(stats_r2l) > 0:
                     r2l_mean = np.mean(stats_r2l)
 
-                recorder.send_message(
-                    "{:.0f} cars in the past {:.0f} hours\nL2R {:.0f}% at {:.0f} speed\nR2L {:.0f}% at {:.0f} speed".format(
+                # Log periodic statistics (Telegram support removed)
+                logging.info(
+                    "Stats: {:.0f} cars in the past {:.0f} hours | L2R {:.0f}% at {:.0f} mph | R2L {:.0f}% at {:.0f} mph".format(
                         total, cfg.telegram_frequency, l2r_perc, l2r_mean, r2l_perc, r2l_mean
                     )
                 )

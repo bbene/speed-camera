@@ -1,16 +1,46 @@
 version: '3.8'
 
 services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: speed-camera-postgres
+    restart: on-failure
+    environment:
+      POSTGRES_USER: speed_camera
+      POSTGRES_PASSWORD: speed_camera_password
+      POSTGRES_DB: speed_camera
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U speed_camera"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   speed-camera:
     build: .
     container_name: speed-camera
     restart: on-failure
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:5000"
     command: ["python", "speed-camera.py", "--config", "/app/config.yaml"]
     volumes:
       # Mount source code for development (hot-reload)
       - ./speed-camera.py:/app/speed-camera.py
       - ./camera.py:/app/camera.py
       - ./calibrate.py:/app/calibrate.py
+      - ./models.py:/app/models.py
+      - ./database.py:/app/database.py
       # Mount config file (read-only)
       - ./config.yaml:/app/config.yaml:ro
       # Mount data directory for CSV logs and alerts
@@ -19,6 +49,7 @@ services:
       - ./logs:/app/logs
     environment:
       - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql://speed_camera:speed_camera_password@postgres:5432/speed_camera
     # Adjust these based on your system
     # For development/testing:
     # deploy:
@@ -34,3 +65,6 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+volumes:
+  postgres_data:
