@@ -119,8 +119,17 @@ function renderDetectionsTable(detections) {
     }
 
     tbody.innerHTML = detections.map(d => {
+        // Parse UTC timestamp (ISO format with Z suffix) and convert to local timezone
         const date = new Date(d.timestamp);
-        const timeStr = date.toLocaleString();
+        const timeStr = date.toLocaleString('en-US', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: true
+        });
         const directionLabel = d.direction === 'LTR' ? '→' : '←';
         const directionClass = d.direction === 'LTR' ? 'status-ltr' : 'status-rtl';
 

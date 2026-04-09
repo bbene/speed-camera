@@ -42,7 +42,7 @@ class Detection(Base):
         """Convert detection to dictionary for JSON serialization"""
         return {
             'id': self.id,
-            'timestamp': self.timestamp.isoformat() if self.timestamp else None,
+            'timestamp': self.timestamp.isoformat() + 'Z' if self.timestamp else None,
             'speed_mph': round(self.speed_mph, 1),
             'speed_deviation': round(self.speed_deviation, 1) if self.speed_deviation else None,
             'area': self.area,
