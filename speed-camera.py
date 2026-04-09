@@ -832,11 +832,10 @@ try:
                     # If we've stopped or are going backward, reset.
                     if mph <= 0:
                         logging.info("negative speed - stopping tracking")
+                        # Don't change direction, just mark for save
                         if direction == LEFT_TO_RIGHT:
-                            direction = RIGHT_TO_LEFT  # Reset correct direction
                             x = 1 # Force save
                         else:
-                            direction = LEFT_TO_RIGHT  # Reset correct direction
                             x = cfg.monitored_width + MIN_SAVE_BUFFER  # Force save
 
                     logging.info("{0:4d}  {1:7.2f}  {2:7.0f}   {3:4d}  {4:4d} {5:4d} {6:s}".format(
