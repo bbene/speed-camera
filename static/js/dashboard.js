@@ -130,7 +130,7 @@ function renderDetectionsTable(detections) {
             second: '2-digit',
             hour12: true
         });
-        const directionLabel = d.direction === 'LTR' ? '→' : '←';
+        const directionLabel = d.direction === 'LTR' ? '←' : '→';
         const directionClass = d.direction === 'LTR' ? 'status-ltr' : 'status-rtl';
 
         let gifCell = '<td>-</td>';
