@@ -138,12 +138,12 @@ class Recorder:
         Path(folder).mkdir(parents=True, exist_ok=True)
 
         data = []
-        for e in events:
+        for i, e in enumerate(events):
             # annotate it
             image = annotate_image(e['image'], e['ts'], mph=e['mph'], confidence=confidence, x=e['x'], y=e['y'], w=e['w'], h=e['h'])
 
-            # and save the image to disk
-            cv2.imwrite("{}/{}.jpg".format(folder, e['ts']), image)
+            # and save the image to disk with a safe filename
+            cv2.imwrite("{}/{:04d}.jpg".format(folder, i), image)
 
             del(e['image'])
             e['ts'] = e['ts'].timestamp()
