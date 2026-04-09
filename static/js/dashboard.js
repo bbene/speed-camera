@@ -32,9 +32,17 @@ function getDateRange() {
     const dateFrom = document.getElementById('date-from').value;
     const dateTo = document.getElementById('date-to').value;
 
+    let toDate = null;
+    if (dateTo) {
+        const date = new Date(dateTo);
+        // Set to end of day (23:59:59.999) to include all events on the selected date
+        date.setHours(23, 59, 59, 999);
+        toDate = date.toISOString();
+    }
+
     return {
         from: dateFrom ? new Date(dateFrom).toISOString() : null,
-        to: dateTo ? new Date(dateTo).toISOString() : null
+        to: toDate
     };
 }
 
