@@ -32,16 +32,22 @@ function getDateRange() {
     const dateFrom = document.getElementById('date-from').value;
     const dateTo = document.getElementById('date-to').value;
 
+    let fromDate = null;
     let toDate = null;
+
+    if (dateFrom) {
+        fromDate = new Date(dateFrom).toISOString();
+    }
+
     if (dateTo) {
         const date = new Date(dateTo);
-        // Set to end of day (23:59:59.999) to include all events on the selected date
-        date.setHours(23, 59, 59, 999);
+        // Add 1 full day to include all events on the selected date
+        date.setDate(date.getDate() + 1);
         toDate = date.toISOString();
     }
 
     return {
-        from: dateFrom ? new Date(dateFrom).toISOString() : null,
+        from: fromDate,
         to: toDate
     };
 }
