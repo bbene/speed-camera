@@ -23,7 +23,6 @@ import yaml
 import shutil
 import subprocess
 from PIL import Image
-from multiprocessing import Process
 from threading import Thread
 from camera import create_camera
 from flask import Flask, render_template, jsonify, request, send_file, redirect
@@ -246,8 +245,8 @@ class Recorder:
 
         # If the threshold is high enough, alert and write to disk
         if confidence >= self.min_confidence_alert and mean_speed >= self.min_speed_alert:
-            p = Process(target=self.send_animation, args=(timestamp, events, confidence, mean_speed,))
-            p.start()
+            thread = Thread(target=self.send_animation, args=(timestamp, events, confidence, mean_speed,), daemon=True)
+            thread.start()
 
         return True
 
